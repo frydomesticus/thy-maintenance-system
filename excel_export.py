@@ -1,34 +1,34 @@
 """
-THY Maintenance System - Excel Export Module
-=============================================
-Bu modül, bakım sistemini Excel dosyasına aktarır.
+THY Maintenance System - Interactive Excel Simulator
+=====================================================
+Bu modül, Excel'de interaktif simülatör içeren bir dosya oluşturur.
 
 Özellikler:
-- Filo Verileri sayfası
-- Bakım Hesaplamaları sayfası
-- Dashboard özet sayfası
-- Koşullu biçimlendirme ile renkli uyarılar
-- Grafikler
+- Simülatör sayfası: Dropdown'dan uçak seçimi
+- VLOOKUP/INDEX-MATCH formülleri ile otomatik veri çekme
+- Koşullu biçimlendirme ile görsel göstergeler
+- Progress bar benzeri görselleştirme
 """
 
 import pandas as pd
 from datetime import datetime, timedelta
 import random
 from openpyxl import Workbook
-from openpyxl.styles import Font, Fill, PatternFill, Border, Side, Alignment
+from openpyxl.styles import Font, PatternFill, Border, Side, Alignment, Color
 from openpyxl.styles.differential import DifferentialStyle
-from openpyxl.formatting.rule import ColorScaleRule, CellIsRule, FormulaRule
+from openpyxl.formatting.rule import ColorScaleRule, CellIsRule, FormulaRule, DataBarRule
 from openpyxl.chart import BarChart, PieChart, Reference
 from openpyxl.chart.label import DataLabelList
 from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.datavalidation import DataValidation
+from openpyxl.comments import Comment
 
 
 # ============================================
 # STYLES
 # ============================================
 
-# Colors
 THY_RED = "E31837"
 DARK_BLUE = "1a1a2e"
 GREEN = "00b894"
@@ -36,23 +36,25 @@ YELLOW = "fdcb6e"
 ORANGE = "f39c12"
 RED = "e74c3c"
 LIGHT_BLUE = "74b9ff"
+WHITE = "FFFFFF"
+LIGHT_GRAY = "F5F5F5"
 
-# Fills
 header_fill = PatternFill(start_color=THY_RED, end_color=THY_RED, fill_type="solid")
 subheader_fill = PatternFill(start_color=DARK_BLUE, end_color=DARK_BLUE, fill_type="solid")
 ok_fill = PatternFill(start_color=GREEN, end_color=GREEN, fill_type="solid")
 warning_fill = PatternFill(start_color=YELLOW, end_color=YELLOW, fill_type="solid")
 critical_fill = PatternFill(start_color=RED, end_color=RED, fill_type="solid")
 highlight_fill = PatternFill(start_color=LIGHT_BLUE, end_color=LIGHT_BLUE, fill_type="solid")
+input_fill = PatternFill(start_color="E8F4FD", end_color="E8F4FD", fill_type="solid")
+output_fill = PatternFill(start_color="FFF9E6", end_color="FFF9E6", fill_type="solid")
 
-# Fonts
-header_font = Font(bold=True, color="FFFFFF", size=14)
-subheader_font = Font(bold=True, color="FFFFFF", size=11)
-title_font = Font(bold=True, size=16, color=THY_RED)
-normal_font = Font(size=10)
-bold_font = Font(bold=True, size=10)
+header_font = Font(bold=True, color="FFFFFF", size=12)
+title_font = Font(bold=True, size=18, color=THY_RED)
+subtitle_font = Font(bold=True, size=14, color=DARK_BLUE)
+label_font = Font(bold=True, size=11)
+value_font = Font(size=12)
+big_value_font = Font(bold=True, size=16)
 
-# Borders
 thin_border = Border(
     left=Side(style='thin'),
     right=Side(style='thin'),
@@ -60,21 +62,15 @@ thin_border = Border(
     bottom=Side(style='thin')
 )
 
-# Alignment
-center_align = Alignment(horizontal='center', vertical='center')
+thick_border = Border(
+    left=Side(style='medium'),
+    right=Side(style='medium'),
+    top=Side(style='medium'),
+    bottom=Side(style='medium')
+)
+
+center_align = Alignment(horizontal='center', vertical='center', wrap_text=True)
 left_align = Alignment(horizontal='left', vertical='center')
-
-
-# ============================================
-# MAINTENANCE LIMITS
-# ============================================
-
-MAINTENANCE_LIMITS = {
-    "A": {"fh_limit": 600, "fc_limit": 400, "days_limit": None, "duration_days": 1},
-    "B": {"fh_limit": None, "fc_limit": None, "days_limit": 180, "duration_days": 3},
-    "C": {"fh_limit": 6000, "fc_limit": None, "days_limit": 730, "duration_days": 7},
-    "D": {"fh_limit": None, "fc_limit": None, "days_limit": 2190, "duration_days": 30}
-}
 
 
 # ============================================
@@ -139,22 +135,8 @@ def generate_fleet_data():
             daily_fh = round(random.uniform(6, 14), 1)
             status = random.choice(["Aktif", "Aktif", "Aktif", "Bakımda"])
             
-            # Calculate maintenance percentages
-            a_check_pct = round(max((fh_since_check / 600) * 100, (fc_since_check / 400) * 100), 1)
             days_since_maint = (today - last_maint_date).days
-            b_check_pct = round((days_since_maint / 180) * 100, 1)
-            c_check_pct = round(max((fh_since_check * 2 / 6000) * 100, (days_since_maint / 730) * 100), 1)
             days_since_d = (today - last_d_check).days
-            d_check_pct = round((days_since_d / 2190) * 100, 1)
-            
-            # Determine status levels
-            def get_status(pct):
-                if pct >= 90:
-                    return "KRİTİK"
-                elif pct >= 75:
-                    return "UYARI"
-                else:
-                    return "NORMAL"
             
             data.append({
                 "Kuyruk No": tail_number,
@@ -167,21 +149,11 @@ def generate_fleet_data():
                 "Son Bakımdan Beri FH": fh_since_check,
                 "Son Bakımdan Beri FC": fc_since_check,
                 "Son Bakım Tarihi": last_maint_date.strftime("%Y-%m-%d"),
+                "Son Bakımdan Beri Gün": days_since_maint,
                 "Son D-Check": last_d_check.strftime("%Y-%m-%d"),
+                "Son D-Check Beri Gün": days_since_d,
                 "Günlük Ort. FH": daily_fh,
-                "Durum": status,
-                "A Check %": min(a_check_pct, 100),
-                "B Check %": min(b_check_pct, 100),
-                "C Check %": min(c_check_pct, 100),
-                "D Check %": min(d_check_pct, 100),
-                "A Check Durum": get_status(a_check_pct),
-                "B Check Durum": get_status(b_check_pct),
-                "C Check Durum": get_status(c_check_pct),
-                "D Check Durum": get_status(d_check_pct),
-                "Kalan A Check (gün)": max(0, int((600 - fh_since_check) / daily_fh)) if daily_fh > 0 else 999,
-                "Kalan B Check (gün)": max(0, 180 - days_since_maint),
-                "Kalan C Check (gün)": max(0, 730 - days_since_maint),
-                "Kalan D Check (gün)": max(0, 2190 - days_since_d)
+                "Durum": status
             })
 
     return pd.DataFrame(data).sort_values("Kuyruk No").reset_index(drop=True)
@@ -191,23 +163,23 @@ def generate_fleet_data():
 # EXCEL CREATION
 # ============================================
 
-def create_excel_workbook(df):
-    """Ana Excel dosyasını oluştur"""
+def create_simulator_excel(df):
+    """Interaktif simülatör Excel dosyası oluştur"""
     
     wb = Workbook()
     
-    # ========== SHEET 1: DASHBOARD ==========
-    ws_dashboard = wb.active
-    ws_dashboard.title = "Dashboard"
-    create_dashboard(ws_dashboard, df)
+    # ========== SHEET 1: SIMULATOR ==========
+    ws_sim = wb.active
+    ws_sim.title = "Simülatör"
+    create_simulator_sheet(ws_sim, df)
     
-    # ========== SHEET 2: FLEET DATA ==========
-    ws_fleet = wb.create_sheet("Filo Verileri")
-    create_fleet_sheet(ws_fleet, df)
+    # ========== SHEET 2: DATABASE ==========
+    ws_db = wb.create_sheet("Veritabanı")
+    create_database_sheet(ws_db, df)
     
-    # ========== SHEET 3: MAINTENANCE STATUS ==========
-    ws_maint = wb.create_sheet("Bakım Durumu")
-    create_maintenance_sheet(ws_maint, df)
+    # ========== SHEET 3: MAINTENANCE RULES ==========
+    ws_rules = wb.create_sheet("Bakım Kuralları")
+    create_rules_sheet(ws_rules)
     
     # ========== SHEET 4: REFERENCES ==========
     ws_refs = wb.create_sheet("Akademik Referanslar")
@@ -216,147 +188,300 @@ def create_excel_workbook(df):
     return wb
 
 
-def create_dashboard(ws, df):
-    """Dashboard sayfasını oluştur"""
+def create_simulator_sheet(ws, df):
+    """Interaktif simülatör sayfası"""
     
-    # Title
-    ws.merge_cells('A1:H1')
-    ws['A1'] = "✈️ THY AIRCRAFT MAINTENANCE PLANNING SYSTEM"
-    ws['A1'].font = Font(bold=True, size=20, color=THY_RED)
-    ws['A1'].alignment = center_align
+    # Set column widths
+    ws.column_dimensions['A'].width = 5
+    ws.column_dimensions['B'].width = 25
+    ws.column_dimensions['C'].width = 25
+    ws.column_dimensions['D'].width = 5
+    ws.column_dimensions['E'].width = 25
+    ws.column_dimensions['F'].width = 20
+    ws.column_dimensions['G'].width = 15
+    ws.column_dimensions['H'].width = 15
+    ws.column_dimensions['I'].width = 5
+    ws.column_dimensions['J'].width = 25
+    ws.column_dimensions['K'].width = 20
     
-    ws.merge_cells('A2:H2')
-    ws['A2'] = f"Dashboard - Oluşturulma Tarihi: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-    ws['A2'].font = Font(size=11, italic=True)
-    ws['A2'].alignment = center_align
+    # ========== HEADER ==========
+    ws.merge_cells('B2:K2')
+    ws['B2'] = "✈️ THY AIRCRAFT MAINTENANCE SIMULATOR"
+    ws['B2'].font = Font(bold=True, size=22, color=THY_RED)
+    ws['B2'].alignment = center_align
     
-    # Fleet Summary Section
-    ws['A4'] = "FİLO ÖZETİ"
-    ws['A4'].font = header_font
-    ws['A4'].fill = header_fill
-    ws.merge_cells('A4:B4')
+    ws.merge_cells('B3:K3')
+    ws['B3'] = "Uçak Bakım Karar Destek Sistemi - Excel Simülasyonu"
+    ws['B3'].font = Font(size=12, italic=True)
+    ws['B3'].alignment = center_align
     
-    # Summary metrics
-    metrics = [
-        ("Toplam Uçak", len(df)),
-        ("Aktif Uçak", len(df[df["Durum"] == "Aktif"])),
-        ("Bakımda", len(df[df["Durum"] == "Bakımda"])),
-        ("Dar Gövde (Narrow)", len(df[df["Kategori"] == "NARROW"])),
-        ("Geniş Gövde (Wide)", len(df[df["Kategori"] == "WIDE"])),
-        ("Kargo", len(df[df["Kategori"] == "CARGO"])),
-        ("Toplam Uçuş Saati", f"{df['Toplam FH'].sum():,} FH"),
-        ("Model Sayısı", df["Model"].nunique())
+    ws.merge_cells('B4:K4')
+    ws['B4'] = f"Sistem Tarihi: {datetime.now().strftime('%Y-%m-%d')} | Referanslar: Papakostas (2010), Callewaert (2017), Kowalski (2021)"
+    ws['B4'].font = Font(size=10, color="666666")
+    ws['B4'].alignment = center_align
+    
+    # ========== INPUT SECTION ==========
+    ws.merge_cells('B6:C6')
+    ws['B6'] = "📋 UÇAK SEÇİMİ"
+    ws['B6'].font = header_font
+    ws['B6'].fill = header_fill
+    ws['B6'].alignment = center_align
+    
+    # Model Selection
+    ws['B8'] = "Uçak Modeli:"
+    ws['B8'].font = label_font
+    ws['C8'] = "Boeing 777-300ER"  # Default value
+    ws['C8'].fill = input_fill
+    ws['C8'].border = thick_border
+    ws['C8'].font = value_font
+    
+    # Create dropdown for models
+    models = sorted(df["Model"].unique().tolist())
+    model_validation = DataValidation(
+        type="list",
+        formula1=f'"' + ','.join(models) + '"',
+        allow_blank=False
+    )
+    model_validation.error = "Lütfen listeden bir model seçin"
+    model_validation.errorTitle = "Geçersiz Seçim"
+    model_validation.prompt = "Uçak modelini seçin"
+    model_validation.promptTitle = "Model Seçimi"
+    ws.add_data_validation(model_validation)
+    model_validation.add(ws['C8'])
+    
+    # Tail Number Selection
+    ws['B10'] = "Kuyruk Numarası:"
+    ws['B10'].font = label_font
+    ws['C10'] = "TC-JJA10"  # Default - will be updated by formula
+    ws['C10'].fill = input_fill
+    ws['C10'].border = thick_border
+    ws['C10'].font = value_font
+    
+    # Note: In real Excel, this would be a dynamic dropdown based on model
+    # For now, include all tail numbers
+    tails = sorted(df["Kuyruk No"].unique().tolist())
+    tail_validation = DataValidation(
+        type="list",
+        formula1=f'"' + ','.join(tails[:100]) + '"',  # Limit to first 100 for Excel limits
+        allow_blank=False
+    )
+    tail_validation.error = "Lütfen listeden bir kuyruk numarası seçin"
+    ws.add_data_validation(tail_validation)
+    tail_validation.add(ws['C10'])
+    
+    # Instructions
+    ws['B12'] = "💡 Kullanım:"
+    ws['B12'].font = Font(bold=True, color=DARK_BLUE)
+    ws['B13'] = "1. Yukarıdaki dropdown'lardan uçak seçin"
+    ws['B14'] = "2. Sağ taraftaki bakım durumu otomatik güncellenecek"
+    ws['B15'] = "3. Veritabanı sayfasından tüm uçakları görüntüleyebilirsiniz"
+    
+    # ========== AIRCRAFT INFO SECTION ==========
+    ws.merge_cells('E6:G6')
+    ws['E6'] = "🛫 UÇAK BİLGİLERİ"
+    ws['E6'].font = header_font
+    ws['E6'].fill = subheader_fill
+    ws['E6'].alignment = center_align
+    
+    # Info rows with VLOOKUP formulas (simulated with static data for now)
+    info_labels = [
+        ("Model", 8),
+        ("Kategori", 9),
+        ("Toplam Uçuş Saati (FH)", 10),
+        ("Toplam Döngü (FC)", 11),
+        ("Son Bakım Tipi", 12),
+        ("Son Bakımdan Beri FH", 13),
+        ("Son Bakımdan Beri FC", 14),
+        ("Son Bakım Tarihi", 15),
+        ("Günlük Ort. FH", 16),
+        ("Mevcut Durum", 17)
     ]
     
-    for i, (label, value) in enumerate(metrics):
-        row = 5 + i
-        ws[f'A{row}'] = label
-        ws[f'A{row}'].font = bold_font
-        ws[f'B{row}'] = value
-        ws[f'A{row}'].border = thin_border
-        ws[f'B{row}'].border = thin_border
-    
-    # Critical/Warning/OK Summary
-    ws['D4'] = "BAKIM DURUMU ÖZETİ"
-    ws['D4'].font = header_font
-    ws['D4'].fill = header_fill
-    ws.merge_cells('D4:F4')
-    
-    critical_count = len(df[df["A Check Durum"] == "KRİTİK"]) + len(df[df["B Check Durum"] == "KRİTİK"])
-    warning_count = len(df[df["A Check Durum"] == "UYARI"]) + len(df[df["B Check Durum"] == "UYARI"])
-    normal_count = len(df) * 4 - critical_count - warning_count
-    
-    status_data = [
-        ("🔴 KRİTİK (≥90%)", critical_count, critical_fill),
-        ("🟡 UYARI (75-89%)", warning_count, warning_fill),
-        ("🟢 NORMAL (<75%)", normal_count, ok_fill)
-    ]
-    
-    for i, (label, count, fill) in enumerate(status_data):
-        row = 5 + i
-        ws[f'D{row}'] = label
-        ws[f'D{row}'].font = bold_font
-        ws[f'E{row}'] = count
-        ws[f'F{row}'] = f"{(count / (len(df) * 4) * 100):.1f}%"
-        ws[f'D{row}'].fill = fill
-        ws[f'D{row}'].border = thin_border
+    for label, row in info_labels:
+        ws[f'E{row}'] = label + ":"
+        ws[f'E{row}'].font = label_font
         ws[f'E{row}'].border = thin_border
+        
+        # Formula to lookup from database
+        col_index = ["Kuyruk No", "Model", "Kategori", "Teslim Tarihi", "Toplam FH", 
+                     "Toplam FC", "Son Bakım Tipi", "Son Bakımdan Beri FH", 
+                     "Son Bakımdan Beri FC", "Son Bakım Tarihi", "Son Bakımdan Beri Gün",
+                     "Son D-Check", "Son D-Check Beri Gün", "Günlük Ort. FH", "Durum"]
+        
+        # Map label to column index
+        label_to_col = {
+            "Model": 2,
+            "Kategori": 3,
+            "Toplam Uçuş Saati (FH)": 5,
+            "Toplam Döngü (FC)": 6,
+            "Son Bakım Tipi": 7,
+            "Son Bakımdan Beri FH": 8,
+            "Son Bakımdan Beri FC": 9,
+            "Son Bakım Tarihi": 10,
+            "Günlük Ort. FH": 14,
+            "Mevcut Durum": 15
+        }
+        
+        col_idx = label_to_col.get(label, 2)
+        ws[f'F{row}'] = f'=IFERROR(VLOOKUP($C$10,Veritabanı!$A$3:$O$290,{col_idx},FALSE),"-")'
+        ws[f'F{row}'].fill = output_fill
         ws[f'F{row}'].border = thin_border
+        ws[f'F{row}'].font = value_font
     
-    # Maintenance Limits Reference
-    ws['A15'] = "BAKIM LİMİTLERİ (EASA/FAA Standartları)"
-    ws['A15'].font = header_font
-    ws['A15'].fill = subheader_fill
-    ws.merge_cells('A15:E15')
+    # ========== MAINTENANCE STATUS SECTION ==========
+    ws.merge_cells('J6:K6')
+    ws['J6'] = "⚙️ BAKIM DURUMU"
+    ws['J6'].font = header_font
+    ws['J6'].fill = header_fill
+    ws['J6'].alignment = center_align
     
-    limits_headers = ["Check Tipi", "FH Limiti", "FC Limiti", "Zaman Limiti", "Süre"]
-    for i, header in enumerate(limits_headers):
-        col = get_column_letter(i + 1)
-        ws[f'{col}16'] = header
-        ws[f'{col}16'].font = subheader_font
-        ws[f'{col}16'].fill = subheader_fill
-        ws[f'{col}16'].border = thin_border
-    
-    limits_data = [
-        ("A Check", "600 FH", "400 FC", "-", "1 gün"),
-        ("B Check (Phased)", "-", "-", "180 gün (6 ay)", "3 gün"),
-        ("C Check", "6,000 FH", "-", "730 gün (2 yıl)", "7 gün"),
-        ("D Check (Heavy)", "-", "-", "2,190 gün (6 yıl)", "30 gün")
+    # Maintenance calculations
+    maint_checks = [
+        ("A Check", 8, "FH", 600, 400),
+        ("B Check (Phased)", 12, "Days", 180, None),
+        ("C Check", 16, "FH", 6000, 730),
+        ("D Check (Heavy)", 20, "Days", 2190, None)
     ]
     
-    for i, row_data in enumerate(limits_data):
-        row = 17 + i
-        for j, value in enumerate(row_data):
-            col = get_column_letter(j + 1)
-            ws[f'{col}{row}'] = value
-            ws[f'{col}{row}'].border = thin_border
+    for check_name, start_row, check_type, limit1, limit2 in maint_checks:
+        # Check name header
+        ws.merge_cells(f'J{start_row}:K{start_row}')
+        ws[f'J{start_row}'] = check_name
+        ws[f'J{start_row}'].font = Font(bold=True, size=12)
+        ws[f'J{start_row}'].fill = PatternFill(start_color="E0E0E0", end_color="E0E0E0", fill_type="solid")
+        ws[f'J{start_row}'].border = thick_border
+        ws[f'J{start_row}'].alignment = center_align
+        
+        # Progress percentage
+        ws[f'J{start_row+1}'] = "İlerleme (%):"
+        ws[f'J{start_row+1}'].font = label_font
+        
+        if check_name == "A Check":
+            # A Check: MAX of FH/600 and FC/400
+            ws[f'K{start_row+1}'] = f'=IFERROR(MIN(100,MAX(VLOOKUP($C$10,Veritabanı!$A$3:$O$290,8,FALSE)/{limit1}*100,VLOOKUP($C$10,Veritabanı!$A$3:$O$290,9,FALSE)/{limit2}*100)),0)'
+        elif check_name == "B Check (Phased)":
+            # B Check: Days since last maintenance / 180
+            ws[f'K{start_row+1}'] = f'=IFERROR(MIN(100,VLOOKUP($C$10,Veritabanı!$A$3:$O$290,11,FALSE)/{limit1}*100),0)'
+        elif check_name == "C Check":
+            # C Check: MAX of FH/6000 and Days/730
+            ws[f'K{start_row+1}'] = f'=IFERROR(MIN(100,MAX(VLOOKUP($C$10,Veritabanı!$A$3:$O$290,8,FALSE)*2/{limit1}*100,VLOOKUP($C$10,Veritabanı!$A$3:$O$290,11,FALSE)/{limit2}*100)),0)'
+        else:  # D Check
+            # D Check: Days since D-Check / 2190
+            ws[f'K{start_row+1}'] = f'=IFERROR(MIN(100,VLOOKUP($C$10,Veritabanı!$A$3:$O$290,13,FALSE)/{limit1}*100),0)'
+        
+        ws[f'K{start_row+1}'].fill = output_fill
+        ws[f'K{start_row+1}'].border = thin_border
+        ws[f'K{start_row+1}'].number_format = '0.0"%"'
+        
+        # Status
+        ws[f'J{start_row+2}'] = "Durum:"
+        ws[f'J{start_row+2}'].font = label_font
+        ws[f'K{start_row+2}'] = f'=IF(K{start_row+1}>=90,"🔴 KRİTİK",IF(K{start_row+1}>=75,"🟡 UYARI","🟢 NORMAL"))'
+        ws[f'K{start_row+2}'].border = thin_border
+        ws[f'K{start_row+2}'].font = Font(bold=True, size=11)
+        
+        # Add conditional formatting for status
+        ws.conditional_formatting.add(
+            f'K{start_row+2}',
+            FormulaRule(
+                formula=[f'K{start_row+1}>=90'],
+                fill=critical_fill
+            )
+        )
+        ws.conditional_formatting.add(
+            f'K{start_row+2}',
+            FormulaRule(
+                formula=[f'AND(K{start_row+1}>=75,K{start_row+1}<90)'],
+                fill=warning_fill
+            )
+        )
+        ws.conditional_formatting.add(
+            f'K{start_row+2}',
+            FormulaRule(
+                formula=[f'K{start_row+1}<75'],
+                fill=ok_fill
+            )
+        )
     
-    # Academic References Note
-    ws['A23'] = "📚 AKADEMİK REFERANSLAR"
-    ws['A23'].font = header_font
-    ws['A23'].fill = highlight_fill
-    ws.merge_cells('A23:H23')
+    # ========== SUMMARY BOX ==========
+    ws.merge_cells('B20:C20')
+    ws['B20'] = "📊 EN KRİTİK BAKIM"
+    ws['B20'].font = header_font
+    ws['B20'].fill = PatternFill(start_color=RED, end_color=RED, fill_type="solid")
+    ws['B20'].alignment = center_align
     
-    refs = [
-        "• Papakostas et al. (2010) - Phased/Block Maintenance yaklaşımı",
-        "• Callewaert et al. (2017) - Stokastik bakım süresi modeli (%15 NRF olasılığı)",
-        "• Kowalski et al. (2021) - Kaynak kısıtları (Hangar kapasitesi)",
-        "• Hollander (2025) - Bakım planlamada belirsizlik modelleme"
-    ]
+    ws['B21'] = "Bakım Tipi:"
+    ws['B21'].font = label_font
+    ws['C21'] = '=IF(MAX(K9,K13,K17,K21)=K9,"A Check",IF(MAX(K9,K13,K17,K21)=K13,"B Check",IF(MAX(K9,K13,K17,K21)=K17,"C Check","D Check")))'
+    ws['C21'].font = big_value_font
+    ws['C21'].fill = output_fill
+    ws['C21'].border = thick_border
     
-    for i, ref in enumerate(refs):
-        ws[f'A{24+i}'] = ref
-        ws[f'A{24+i}'].font = Font(size=10, italic=True)
+    ws['B22'] = "İlerleme:"
+    ws['B22'].font = label_font
+    ws['C22'] = '=MAX(K9,K13,K17,K21)'
+    ws['C22'].font = big_value_font
+    ws['C22'].fill = output_fill
+    ws['C22'].border = thick_border
+    ws['C22'].number_format = '0.0"%"'
     
-    # Column widths
-    ws.column_dimensions['A'].width = 25
-    ws.column_dimensions['B'].width = 20
-    ws.column_dimensions['C'].width = 5
-    ws.column_dimensions['D'].width = 25
-    ws.column_dimensions['E'].width = 15
-    ws.column_dimensions['F'].width = 15
+    ws['B23'] = "Genel Durum:"
+    ws['B23'].font = label_font
+    ws['C23'] = '=IF(C22>=90,"🔴 ACİL BAKIM GEREKLİ!",IF(C22>=75,"🟡 BAKIM YAKLAŞIYOR","🟢 NORMAL"))'
+    ws['C23'].font = big_value_font
+    ws['C23'].border = thick_border
+    
+    # Conditional formatting for overall status
+    ws.conditional_formatting.add(
+        'C23',
+        FormulaRule(formula=['C22>=90'], fill=critical_fill)
+    )
+    ws.conditional_formatting.add(
+        'C23',
+        FormulaRule(formula=['AND(C22>=75,C22<90)'], fill=warning_fill)
+    )
+    ws.conditional_formatting.add(
+        'C23',
+        FormulaRule(formula=['C22<75'], fill=ok_fill)
+    )
+    
+    # ========== LEGEND ==========
+    ws['B26'] = "📖 RENK KODLARI:"
+    ws['B26'].font = Font(bold=True)
+    
+    ws['B27'] = "🔴 KRİTİK"
+    ws['B27'].fill = critical_fill
+    ws['C27'] = "≥90% - Acil bakım planlanmalı"
+    
+    ws['B28'] = "🟡 UYARI"
+    ws['B28'].fill = warning_fill
+    ws['C28'] = "75-89% - Bakım penceresi yaklaşıyor"
+    
+    ws['B29'] = "🟢 NORMAL"
+    ws['B29'].fill = ok_fill
+    ws['C29'] = "<75% - Normal operasyon devam"
+    
+    # Row heights
+    ws.row_dimensions[2].height = 35
+    ws.row_dimensions[6].height = 25
 
 
-def create_fleet_sheet(ws, df):
-    """Filo verileri sayfasını oluştur"""
+def create_database_sheet(ws, df):
+    """Veritabanı sayfası (lookup için)"""
     
-    # Title
-    ws.merge_cells('A1:N1')
-    ws['A1'] = "THY FİLO VERİLERİ - 283 Uçak"
+    ws.merge_cells('A1:O1')
+    ws['A1'] = "📊 THY FİLO VERİTABANI - VLOOKUP KAYNAK TABLOSU"
     ws['A1'].font = title_font
     ws['A1'].alignment = center_align
     
-    # Select columns for fleet sheet
-    fleet_columns = ["Kuyruk No", "Model", "Kategori", "Teslim Tarihi", 
-                     "Toplam FH", "Toplam FC", "Son Bakım Tipi", 
-                     "Son Bakımdan Beri FH", "Son Bakımdan Beri FC",
-                     "Son Bakım Tarihi", "Son D-Check", "Günlük Ort. FH", "Durum"]
-    
-    fleet_df = df[fleet_columns]
-    
     # Headers
-    for i, col in enumerate(fleet_columns):
-        cell = ws.cell(row=3, column=i+1)
+    columns = ["Kuyruk No", "Model", "Kategori", "Teslim Tarihi", "Toplam FH", 
+               "Toplam FC", "Son Bakım Tipi", "Son Bakımdan Beri FH", 
+               "Son Bakımdan Beri FC", "Son Bakım Tarihi", "Son Bakımdan Beri Gün",
+               "Son D-Check", "Son D-Check Beri Gün", "Günlük Ort. FH", "Durum"]
+    
+    for i, col in enumerate(columns):
+        cell = ws.cell(row=2, column=i+1)
         cell.value = col
         cell.font = header_font
         cell.fill = header_fill
@@ -364,157 +489,128 @@ def create_fleet_sheet(ws, df):
         cell.alignment = center_align
     
     # Data
-    for r_idx, row in enumerate(fleet_df.values):
-        for c_idx, value in enumerate(row):
-            cell = ws.cell(row=r_idx+4, column=c_idx+1)
-            cell.value = value
+    for r_idx, row in df.iterrows():
+        for c_idx, col in enumerate(columns):
+            cell = ws.cell(row=r_idx+3, column=c_idx+1)
+            cell.value = row[col]
             cell.border = thin_border
-            cell.font = normal_font
-            
-            # Conditional formatting for status
-            if c_idx == len(fleet_columns) - 1:  # Durum column
-                if value == "Bakımda":
-                    cell.fill = warning_fill
-                else:
-                    cell.fill = ok_fill
+            cell.alignment = center_align
     
     # Column widths
-    for i, col in enumerate(fleet_columns):
-        ws.column_dimensions[get_column_letter(i+1)].width = max(len(col) + 2, 12)
-
-
-def create_maintenance_sheet(ws, df):
-    """Bakım durumu sayfasını oluştur"""
+    col_widths = [12, 20, 10, 12, 12, 12, 12, 18, 18, 15, 18, 12, 18, 12, 10]
+    for i, width in enumerate(col_widths):
+        ws.column_dimensions[get_column_letter(i+1)].width = width
     
-    # Title
-    ws.merge_cells('A1:L1')
-    ws['A1'] = "BAKIM DURUM TAKİP TABLOSU"
+    # Freeze panes
+    ws.freeze_panes = 'A3'
+
+
+def create_rules_sheet(ws):
+    """Bakım kuralları sayfası"""
+    
+    ws.merge_cells('A1:E1')
+    ws['A1'] = "📋 BAKIM LİMİTLERİ VE KURALLARI (EASA/FAA Standartları)"
     ws['A1'].font = title_font
     ws['A1'].alignment = center_align
     
-    # Select columns for maintenance sheet
-    maint_columns = ["Kuyruk No", "Model", "A Check %", "A Check Durum", 
-                     "B Check %", "B Check Durum", "C Check %", "C Check Durum",
-                     "D Check %", "D Check Durum", "Kalan A Check (gün)", "Kalan B Check (gün)"]
-    
-    maint_df = df[maint_columns]
-    
     # Headers
-    for i, col in enumerate(maint_columns):
+    headers = ["Bakım Tipi", "FH Limiti", "FC Limiti", "Zaman Limiti", "Tahmini Süre"]
+    for i, header in enumerate(headers):
         cell = ws.cell(row=3, column=i+1)
-        cell.value = col
+        cell.value = header
         cell.font = header_font
         cell.fill = header_fill
         cell.border = thin_border
         cell.alignment = center_align
     
-    # Data with conditional formatting
-    for r_idx, row in enumerate(maint_df.values):
-        for c_idx, value in enumerate(row):
+    # Data
+    rules = [
+        ("A Check", 600, 400, "-", "1 gün (24 saat)"),
+        ("B Check (Phased Maintenance)", "-", "-", "180 gün (6 ay)", "3 gün (72 saat)"),
+        ("C Check", 6000, "-", "730 gün (2 yıl)", "7 gün (168 saat)"),
+        ("D Check (Heavy Maintenance)", "-", "-", "2190 gün (6 yıl)", "30 gün (720 saat)")
+    ]
+    
+    for r_idx, row_data in enumerate(rules):
+        for c_idx, value in enumerate(row_data):
             cell = ws.cell(row=r_idx+4, column=c_idx+1)
             cell.value = value
             cell.border = thin_border
-            cell.font = normal_font
             cell.alignment = center_align
-            
-            # Color coding for percentage columns
-            if "%" in maint_columns[c_idx]:
-                if value >= 90:
-                    cell.fill = critical_fill
-                elif value >= 75:
-                    cell.fill = warning_fill
-                else:
-                    cell.fill = ok_fill
-            
-            # Color coding for status columns
-            if "Durum" in maint_columns[c_idx]:
-                if value == "KRİTİK":
-                    cell.fill = critical_fill
-                    cell.font = Font(bold=True, color="FFFFFF")
-                elif value == "UYARI":
-                    cell.fill = warning_fill
-                    cell.font = Font(bold=True)
-                else:
-                    cell.fill = ok_fill
     
-    # Column widths
-    for i, col in enumerate(maint_columns):
-        ws.column_dimensions[get_column_letter(i+1)].width = max(len(col) + 2, 15)
+    # Formulas explanation
+    ws['A9'] = "📐 HESAPLAMA FORMÜLLERİ:"
+    ws['A9'].font = Font(bold=True, size=14)
     
-    # Add legend
-    ws['A290'] = "RENK KODLARI:"
-    ws['A290'].font = bold_font
-    
-    legend = [
-        ("🔴 KRİTİK", "≥90% - Acil bakım gerekli", critical_fill),
-        ("🟡 UYARI", "75-89% - Bakım penceresi yaklaşıyor", warning_fill),
-        ("🟢 NORMAL", "<75% - Normal operasyon", ok_fill)
+    formulas = [
+        ("A Check İlerleme (%)", "MAX(Son_Bakımdan_Beri_FH / 600 , Son_Bakımdan_Beri_FC / 400) * 100"),
+        ("B Check İlerleme (%)", "Son_Bakımdan_Beri_Gün / 180 * 100"),
+        ("C Check İlerleme (%)", "MAX(Son_Bakımdan_Beri_FH * 2 / 6000 , Son_Bakımdan_Beri_Gün / 730) * 100"),
+        ("D Check İlerleme (%)", "Son_D_Check_Beri_Gün / 2190 * 100"),
+        ("Durum", 'IF(İlerleme >= 90, "KRİTİK", IF(İlerleme >= 75, "UYARI", "NORMAL"))')
     ]
     
-    for i, (status, desc, fill) in enumerate(legend):
-        ws[f'A{291+i}'] = status
-        ws[f'A{291+i}'].fill = fill
-        ws[f'B{291+i}'] = desc
+    for i, (name, formula) in enumerate(formulas):
+        ws[f'A{11+i}'] = name
+        ws[f'A{11+i}'].font = label_font
+        ws[f'B{11+i}'] = formula
+        ws[f'B{11+i}'].font = Font(name='Consolas', size=10)
+        ws.merge_cells(f'B{11+i}:E{11+i}')
+    
+    ws.column_dimensions['A'].width = 30
+    ws.column_dimensions['B'].width = 15
+    ws.column_dimensions['C'].width = 15
+    ws.column_dimensions['D'].width = 20
+    ws.column_dimensions['E'].width = 20
 
 
 def create_references_sheet(ws):
-    """Akademik referanslar sayfasını oluştur"""
+    """Akademik referanslar sayfası"""
     
-    ws.merge_cells('A1:E1')
-    ws['A1'] = "📚 AKADEMİK REFERANSLAR VE METODOLOJİ"
+    ws.merge_cells('A1:D1')
+    ws['A1'] = "📚 AKADEMİK REFERANSLAR"
     ws['A1'].font = title_font
     ws['A1'].alignment = center_align
     
-    # References
     references = [
-        ("1. Papakostas et al. (2010)", 
+        ("Papakostas et al. (2010)", 
          "Operational Aircraft Maintenance Planning: A Multi-objective Approach",
-         "Modern havayolları Phased/Block Maintenance yaklaşımı kullanır.",
-         "B Check = Phased Maintenance olarak adlandırılır."),
+         "B Check modern havacılıkta 'Phased Maintenance' olarak uygulanır."),
         
-        ("2. Callewaert et al. (2017)", 
+        ("Callewaert et al. (2017)", 
          "Integrating maintenance work progress monitoring in a stochastic framework",
-         "Bakım süresi deterministik değildir. %15 ihtimalle Non-Routine Finding çıkar.",
-         "T_actual = T_base + T_NRF (1-3 gün ek gecikme)"),
+         "Bakımların %15'inde Non-Routine Finding çıkar, süre 1-3 gün uzar."),
         
-        ("3. Kowalski et al. (2021)", 
+        ("Kowalski et al. (2021)", 
          "Resource-constrained project scheduling for aircraft maintenance",
-         "Hangar kapasitesi sınırlıdır. Aynı anda max 5 geniş gövde bakıma alınabilir.",
-         "Kapasite doluysa bakım ertelenir (Deferred Maintenance)."),
+         "Hangar kapasitesi sınırlıdır, eş zamanlı max 5 geniş gövde bakımı."),
         
-        ("4. Hollander (2025)", 
+        ("Hollander (2025)", 
          "Uncertainty Quantification in Aviation Maintenance Planning",
-         "Bakım planlamada belirsizlik olasılık dağılımlarıyla modellenmelidir.",
-         "Stokastik modelleme Callewaert (2017) ile birlikte kullanılır.")
+         "Belirsizlik olasılık dağılımlarıyla modellenmelidir.")
     ]
     
-    row = 4
-    for ref, title, contribution, application in references:
-        ws[f'A{row}'] = ref
+    row = 3
+    for author, title, note in references:
+        ws[f'A{row}'] = author
         ws[f'A{row}'].font = Font(bold=True, size=12, color=THY_RED)
-        ws.merge_cells(f'A{row}:E{row}')
         
-        ws[f'A{row+1}'] = f"Başlık: {title}"
+        ws[f'A{row+1}'] = f"📄 {title}"
         ws[f'A{row+1}'].font = Font(italic=True)
-        ws.merge_cells(f'A{row+1}:E{row+1}')
         
-        ws[f'A{row+2}'] = f"Katkı: {contribution}"
-        ws.merge_cells(f'A{row+2}:E{row+2}')
+        ws[f'A{row+2}'] = f"💡 {note}"
+        ws[f'A{row+2}'].font = Font(color="0066CC")
         
-        ws[f'A{row+3}'] = f"Uygulama: {application}"
-        ws[f'A{row+3}'].font = Font(color="0066CC")
-        ws.merge_cells(f'A{row+3}:E{row+3}')
-        
-        row += 5
+        row += 4
     
     ws.column_dimensions['A'].width = 100
 
 
 def main():
-    """Ana fonksiyon - Excel dosyasını oluştur ve kaydet"""
+    """Ana fonksiyon"""
     
     print("=" * 60)
-    print("THY Maintenance System - Excel Export")
+    print("THY Maintenance System - Interactive Excel Simulator")
     print("=" * 60)
     
     # Generate data
@@ -523,23 +619,29 @@ def main():
     print(f"   ✓ {len(df)} uçak verisi üretildi")
     
     # Create workbook
-    print("\n📑 Excel dosyası oluşturuluyor...")
-    wb = create_excel_workbook(df)
+    print("\n📑 Excel simülatörü oluşturuluyor...")
+    wb = create_simulator_excel(df)
     
     # Save
-    output_path = "THY_Maintenance_System.xlsx"
+    output_path = "THY_Maintenance_Simulator.xlsx"
     wb.save(output_path)
     print(f"   ✓ Dosya kaydedildi: {output_path}")
     
     print("\n" + "=" * 60)
-    print("✅ Excel dosyası başarıyla oluşturuldu!")
+    print("✅ Excel Simülatörü başarıyla oluşturuldu!")
     print("=" * 60)
     
     print("\n📋 Sayfalar:")
-    print("   1. Dashboard - Özet ve istatistikler")
-    print("   2. Filo Verileri - 283 uçağın detaylı bilgileri")
-    print("   3. Bakım Durumu - A/B/C/D check ilerleme durumları")
-    print("   4. Akademik Referanslar - Literatür bilgileri")
+    print("   1. Simülatör - Dropdown'dan uçak seç, bakım durumunu gör")
+    print("   2. Veritabanı - Tüm filo verileri (VLOOKUP kaynağı)")
+    print("   3. Bakım Kuralları - A/B/C/D check limitleri")
+    print("   4. Akademik Referanslar - Literatür")
+    
+    print("\n🎯 Kullanım:")
+    print("   1. Simülatör sayfasını aç")
+    print("   2. C8 hücresinden uçak modeli seç")
+    print("   3. C10 hücresinden kuyruk numarası seç")
+    print("   4. Sağ taraftaki bakım durumu otomatik güncellenir!")
     
     return output_path
 
